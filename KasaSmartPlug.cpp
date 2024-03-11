@@ -9,6 +9,8 @@ const char *KASAUtil::get_kasa_info = "{\"system\":{\"get_sysinfo\":null}}";
 const char *KASAUtil::relay_on = "{\"system\":{\"set_relay_state\":{\"state\":1}}}";
 const char *KASAUtil::relay_off = "{\"system\":{\"set_relay_state\":{\"state\":0}}}";
 
+#define TAG "KasaSmartPlug"
+
 uint16_t KASAUtil::Encrypt(const char *data, int length, uint8_t addLengthByte, char *encryped_data)
 {
     uint8_t key = KASA_ENCRYPTED_KEY;
@@ -55,11 +57,17 @@ void KASAUtil::closeSock(int sock)
         shutdown(sock, 0);
         close(sock);
     }
+    else
+    {
+        // Log an error indicating that the socket is null
+        ESP_LOGE(TAG, "Socket is null or invalid.");
+    }
 }
 
-KASAUtil::KASAUtil()
+KASAUtil::KASAUtil(esp_log_level_t logLevel)
 {
     deviceFound = 0;
+    esp_log_level_set(TAG, logLevel);
 }
 
 int KASAUtil::ScanDevices(int timeoutMs)
@@ -127,7 +135,7 @@ int KASAUtil::ScanDevices(int timeoutMs)
     }
 
     // Sending the first broadcase message out..
-    ESP_LOGI(TAG, "Send Query Message length  %s %d", get_kasa_info, len);
+    ESP_LOGV(TAG, "Send Query Message length  %s %d", get_kasa_info, len);
 
     err = sendto(sock, sendbuf, len, 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
     if (err < 0)
@@ -136,7 +144,7 @@ int KASAUtil::ScanDevices(int timeoutMs)
         closeSock(sock);
         return -4;
     }
-    Serial.println("Query Message sent");
+    ESP_LOGV(TAG,"Query Message sent");
     int send_loop = 0;
     long time_out_us = (long)timeoutMs * 1000;
     while ((err > 0) && (send_loop < 1))
@@ -149,10 +157,10 @@ int KASAUtil::ScanDevices(int timeoutMs)
         fd_set rfds;
         FD_ZERO(&rfds);
         FD_SET(sock, &rfds);
-        Serial.println("Enter select function...");
+        ESP_LOGV(TAG,"Enter select function...");
 
         int s = select(sock + 1, &rfds, NULL, NULL, &tv);
-        Serial.printf("Select value = %d\n", s);
+        ESP_LOGV(TAG, "Select value = %d\n", s);
 
         if (s < 0)
         {
@@ -170,7 +178,7 @@ int KASAUtil::ScanDevices(int timeoutMs)
 
                 struct sockaddr_storage raddr; // Large enough for both IPv4 or IPv6
                 socklen_t socklen = sizeof(raddr);
-                Serial.println("Waiting incomming package...");
+                ESP_LOGV(TAG,"Waiting incomming package...");
                 int len = recvfrom(sock, recvbuf, sizeof(recvbuf) - 1, 0,
                                    (struct sockaddr *)&raddr, &socklen);
                 if (len < 0)
@@ -190,21 +198,20 @@ int KASAUtil::ScanDevices(int timeoutMs)
                                 raddr_name, sizeof(raddr_name) - 1);
                 }
 
-                Serial.printf("received %d bytes from %s: \r\n", len, raddr_name);
-
+                ESP_LOGV(TAG, "received %d bytes from %s: \r\n", len, raddr_name);
                 recvbuf[len] = 0; // Null-terminate whatever we received and treat like a string...
 
                 // We got the response from the broadcast message
                 // I found HS103 plug would response around 500 to 700 bytes of JSON data
                 if (len > 500)
                 {
-                    Serial.println("Parsing info...");
+                    ESP_LOGV(TAG,"Parsing info...");
                     DeserializationError error = deserializeJson(doc, recvbuf, len);
 
                     if (error)
                     {
-                        Serial.print("deserializeJson() failed: ");
-                        Serial.println(error.c_str());
+                        ESP_LOGE(TAG,"deserializeJson() failed: ");
+                        ESP_LOGV(TAG,error.c_str());
                     }
                     else
                     {
@@ -213,30 +220,36 @@ int KASAUtil::ScanDevices(int timeoutMs)
                         relay_state = get_sysinfo["relay_state"];
                         model = get_sysinfo["model"];
 
-                        if (IsStartWith("HS",model))
+                        ESP_LOGV(TAG,string_value);
+                        ESP_LOGV(TAG,relay_state);
+                        ESP_LOGV(TAG,model);
+
+                        if (!IsStartWith("HS",model) || !IsStartWith("KP",model))
                         {
-                            // Limit the number of devices and make sure no duplicate device.
-                            if (IsContainPlug(string_value) == -1)
+                            Serial.println("Found a valid Kasa Device, but we don't know if it works with this library just yet. You are in unprecedented territory, proceed with caution.");    
+                        }
+
+                        // Limit the number of devices and make sure no duplicate device.
+                        if (IsContainPlug(string_value) == -1)
+                        {
+                            // New device has been found
+                            if (deviceFound < MAX_PLUG_ALLOW)
                             {
-                                // New device has been found
-                                if (deviceFound < MAX_PLUG_ALLOW)
-                                {
-                                    ptr_plugs[deviceFound] = new KASASmartPlug(string_value, raddr_name);
-                                    ptr_plugs[deviceFound]->state = relay_state;
-                                    strcpy(ptr_plugs[deviceFound]->model, model);
-                                    deviceFound++;
-                                } else 
-                                {
-                                    Serial.printf("\r\n Error unable to add more plug");
-                                }
-                            }else 
+                                ptr_plugs[deviceFound] = new KASASmartPlug(string_value, raddr_name);
+                                ptr_plugs[deviceFound]->state = relay_state;
+                                strcpy(ptr_plugs[deviceFound]->model, model);
+                                deviceFound++;
+                            } else 
                             {
-                                //Plug is already in the collection then update IP Address..
-                                KASASmartPlug *plug = KASAUtil::GetSmartPlug(string_value);
-                                if(plug != NULL)
-                                {
-                                    plug->UpdateIPAddress(raddr_name);
-                                }
+                                ESP_LOGE(TAG,"\r\n Error unable to add more plug");
+                            }
+                        }else 
+                        {
+                            //Plug is already in the collection then update IP Address..
+                            KASASmartPlug *plug = KASAUtil::GetSmartPlug(string_value);
+                            if(plug != NULL)
+                            {
+                                plug->UpdateIPAddress(raddr_name);
                             }
                         }
                     }
@@ -247,7 +260,7 @@ int KASAUtil::ScanDevices(int timeoutMs)
 
                 // int len = snprintf(sendbuf, sizeof(sendbuf), sendfmt, send_count++);
 
-                Serial.println("Send Query Message");
+                ESP_LOGV(TAG,"Send Query Message");
 
                 err = sendto(sock, sendbuf, len, 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
                 if (err < 0)
@@ -255,12 +268,12 @@ int KASAUtil::ScanDevices(int timeoutMs)
                     ESP_LOGE(TAG, "Error occurred during sending: errno %d", errno);
                     retValue = -5;
                 }
-                Serial.println("Query Message sent");
+                ESP_LOGV(TAG,"Query Message sent");
             }
         }
         else if (s == 0) // Timeout package
         {
-            Serial.println("S Timeout Send Query Message");
+            ESP_LOGV(TAG,"S Timeout Send Query Message");
             send_loop++;
 
             err = sendto(sock, sendbuf, len, 0, (struct sockaddr *)&dest_addr, sizeof(dest_addr));
@@ -271,12 +284,12 @@ int KASAUtil::ScanDevices(int timeoutMs)
                 closeSock(sock);
                 return retValue;
             }
-            Serial.println("Query Message sent");
+            ESP_LOGV(TAG,"Query Message sent");
         }
 
         vTaskDelay(300 / portTICK_PERIOD_MS);
     }
-    closeSock(sock);
+    // closeSock(sock);
     return deviceFound;
 }
 
@@ -333,7 +346,7 @@ void KASASmartPlug::SendCommand(const char *cmd)
         err = send(sock, sendbuf, len, 0);
         if (err < 0)
         {
-            Serial.printf("\r\n Error while sending data %d", errno);
+            ESP_LOGE(TAG,"\r\n Error while sending data %d", errno);
         }
     }
     vTaskDelay(10 / portTICK_PERIOD_MS); // Make sure the data has been send out before close the socket.
@@ -375,7 +388,7 @@ int KASASmartPlug::Query(const char *cmd, char *buffer, int bufferLength, long t
     // xSemaphoreTake(mutex, portMAX_DELAY);
     if (s < 0)
     {
-        Serial.printf("Select failed: errno %d", errno);
+        ESP_LOGE(TAG,"Select failed: errno %d", errno);
         err = -1;
         CloseSock();
         xSemaphoreGive(mutex);
@@ -397,7 +410,7 @@ int KASASmartPlug::Query(const char *cmd, char *buffer, int bufferLength, long t
     }
     else if (s == 0)
     {
-        Serial.println("Error TCP Read timeout...");
+        ESP_LOGE(TAG,"Error TCP Read timeout...");
         CloseSock();
         xSemaphoreGive(mutex);
         return 0;
@@ -422,8 +435,8 @@ int KASASmartPlug::QueryInfo()
 
         if (error)
         {
-            Serial.print("deserializeJson() failed: ");
-            Serial.println(error.c_str());
+            ESP_LOGE(TAG,"deserializeJson() failed: ");
+            ESP_LOGV(TAG,error.c_str());
             recvLen = -1;
         }
         else
@@ -432,7 +445,7 @@ int KASASmartPlug::QueryInfo()
             state = get_sysinfo["relay_state"];
             err_code = get_sysinfo["err_code"];
             strcpy(alias,get_sysinfo["alias"]);
-            Serial.printf("\r\n Relay state: %d Error Code %d", state, err_code);
+            ESP_LOGV(TAG,"\r\n Relay state: %d Error Code %d", state, err_code);
         }
         xSemaphoreGive(mutex);
     }

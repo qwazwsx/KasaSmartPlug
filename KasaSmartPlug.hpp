@@ -171,7 +171,7 @@ public:
     static uint16_t Decrypt(char *data, int length, char *decryped_data, int startIndex);
     KASASmartPlug *GetSmartPlug(const char *alias_name);
     KASASmartPlug *GetSmartPlugByIndex(int index);
-    KASAUtil();
+    KASAUtil(esp_log_level_t logLevel = ESP_LOG_INFO);
 };
 
 #endif
