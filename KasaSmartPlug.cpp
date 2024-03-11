@@ -190,7 +190,7 @@ int KASAUtil::ScanDevices(int timeoutMs) {
             ESP_LOGV(TAG, relay_state);
             ESP_LOGV(TAG, model);
 
-            if (!IsStartWith("HS", model) || !IsStartWith("KP", model)) {
+            if (!IsStartWith("HS", model) && !IsStartWith("KP", model)) {
               Serial.println(
                   "Found a valid Kasa Device, but we don't know if it works with this library just yet. You are in unprecedented territory, proceed with "
                   "caution.");
